@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Banjo Pitch Trainer</title>
+<style>
+:root{--bg:#eef0ec;--fg:#241c17;--mut:#6b6259;--head:#fbfbf8;--rim:#8c949b;--acc:#2d6a86;--ok:#2f7d3b;--bad:#a8402f;--chip:#dfe3de;
+color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1b1512;--fg:#f0e6d8;--mut:#a89a88;--head:#2a211c;--rim:#6e5a46;--acc:#d9ac52;--ok:#7cc57f;--bad:#e88a74;--chip:#2e241e;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#1b1512;--fg:#f0e6d8;--mut:#a89a88;--head:#2a211c;--rim:#6e5a46;--acc:#d9ac52;--ok:#7cc57f;--bad:#e88a74;--chip:#2e241e;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;min-height:100%}
+main{max-width:480px;margin:0 auto;padding:20px 16px 32px}
+h1{font:600 26px/1.2 Georgia,"Times New Roman",serif;margin:0 0 4px}
+p.sub{margin:0 0 16px;color:var(--mut)}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.chips button{flex:1 1 auto;min-width:80px;padding:10px 8px;border:2px solid transparent;border-radius:10px;background:var(--chip);color:var(--fg);font:inherit;cursor:pointer;line-height:1.2}
+.chips button small{display:block;color:var(--mut);font-size:12px}
+.chips button[aria-pressed="true"]{border-color:var(--acc)}
+.head{position:relative;width:min(100%,360px);aspect-ratio:1;margin:0 auto 16px;border-radius:50%;background:var(--head);border:10px solid var(--rim);box-shadow:inset 0 0 0 2px var(--chip)}
+.head svg{position:absolute;inset:0;width:100%;height:100%}
+.read{position:absolute;left:0;right:0;top:56%;text-align:center}
+.read b{display:block;font:600 52px/1 Georgia,serif}
+.read span{color:var(--mut);font-size:15px}
+.row{display:flex;gap:10px;margin-bottom:12px}
+.row button{flex:1;padding:14px;border-radius:12px;border:0;font:600 16px system-ui,sans-serif;cursor:pointer;background:var(--acc);color:var(--bg)}
+.row button.alt{background:var(--chip);color:var(--fg)}
+button:focus-visible{outline:3px solid var(--fg);outline-offset:2px}
+.bar{height:10px;border-radius:5px;background:var(--chip);overflow:hidden;margin-bottom:8px}
+.bar i{display:block;height:100%;width:0;background:var(--ok)}
+#msg{min-height:3em;margin:0 0 12px}
+label{display:flex;gap:8px;align-items:center;color:var(--mut);font-size:14px}
+.hit{color:var(--ok)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<main>
+<h1>Banjo pitch trainer</h1>
+<p class="sub">Pick a string, listen to the bowed note, then hum, sing or whistle it back.</p>
+
+<div class="chips" id="chips" role="group" aria-label="Banjo string"></div>
+
+<div class="head" aria-live="off">
+  <svg viewBox="0 0 200 200" aria-hidden="true">
+    <path d="M30 120 A70 70 0 0 1 170 120" fill="none" stroke="var(--chip)" stroke-width="10" stroke-linecap="round"/>
+    <path d="M91 52 A70 70 0 0 1 109 52" fill="none" stroke="var(--ok)" stroke-width="10"/>
+    <g id="needle" style="transform-origin:100px 120px;transform:rotate(0deg);transition:transform .12s linear">
+      <line x1="100" y1="120" x2="100" y2="58" stroke="var(--fg)" stroke-width="3" stroke-linecap="round"/>
+    </g>
+    <circle cx="100" cy="120" r="5" fill="var(--fg)"/>
+    <text x="24" y="140" font-size="9" fill="var(--mut)">flat</text>
+    <text x="164" y="140" font-size="9" fill="var(--mut)">sharp</text>
+  </svg>
+  <div class="read"><b id="note">–</b><span id="cents">Mic off</span></div>
+</div>
+
+<div class="bar" aria-hidden="true"><i id="hold"></i></div>
+<p id="msg" role="status">Tap Play note to hear the target.</p>
+
+<div class="row">
+  <button id="play">Play note</button>
+  <button id="mic" class="alt">Start listening</button>
+</div>
+<label><input type="checkbox" id="oct" checked> Match in any octave</label>
+<p class="sub" id="score" style="margin-top:12px">Matches: <span class="hit" id="hits">0</span>. Hold within 25 cents for one second to score.</p>
+</main>
+
+<script>
+const STRINGS=[
+  {n:'D3',f:146.83,l:'4th string'},{n:'G3',f:196.00,l:'3rd string'},
+  {n:'B3',f:246.94,l:'2nd string'},{n:'D4',f:293.66,l:'1st string'},
+  {n:'G4',f:392.00,l:'5th string'}
+];
+const $=id=>document.getElementById(id);
+let sel=3, ac=null, an=null, buf=null, listening=false, ignoreUntil=0, holdMs=0, lastT=0, lastGood=0, hits=0, done=false;
+const NAMES=['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'];
+
+const chips=$('chips');
+STRINGS.forEach((s,i)=>{
+  const b=document.createElement('button');
+  b.innerHTML=s.n+'<small>'+s.l+'</small>';
+  b.setAttribute('aria-pressed',i===sel);
+  b.onclick=()=>{sel=i;[...chips.children].forEach((c,j)=>c.setAttribute('aria-pressed',j===i));holdMs=0;done=false;pluck()};
+  chips.appendChild(b);
+});
+
+function ctx(){
+  if(!ac){ac=new (window.AudioContext||window.webkitAudioContext)()}
+  if(ac.state==='suspended')ac.resume();
+}
+
+// Bowed string: sawtooth tone with a slow attack, steady sustain, soft release and a little bow noise.
+function pluck(){
+  try{ctx()}catch(e){return}
+  const f=STRINGS[sel].f, t=ac.currentTime, dur=3.2;
+  const env=ac.createGain();
+  env.gain.setValueAtTime(0.0001,t);
+  env.gain.exponentialRampToValueAtTime(0.32,t+0.3);
+  env.gain.setValueAtTime(0.32,t+dur-0.5);
+  env.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  const lp=ac.createBiquadFilter(); lp.type='lowpass'; lp.frequency.setValueAtTime(900,t); lp.frequency.linearRampToValueAtTime(2600,t+0.4); lp.Q.value=1.2;
+  const body=ac.createBiquadFilter(); body.type='peaking'; body.frequency.value=700; body.Q.value=1.4; body.gain.value=6;
+  env.connect(lp); lp.connect(body); body.connect(ac.destination);
+  [-3,3].forEach(det=>{
+    const o=ac.createOscillator(); o.type='sawtooth'; o.frequency.value=f; o.detune.value=det;
+    const g=ac.createGain(); g.gain.value=0.5; o.connect(g); g.connect(env); o.start(t); o.stop(t+dur+0.1);
+  });
+  const nb=ac.createBuffer(1,Math.floor(ac.sampleRate*dur),ac.sampleRate), d=nb.getChannelData(0);
+  for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
+  const ns=ac.createBufferSource(), nf=ac.createBiquadFilter(), ng=ac.createGain();
+  nf.type='bandpass'; nf.frequency.value=f*4; nf.Q.value=0.8; ng.gain.value=0.04;
+  ns.buffer=nb; ns.connect(nf); nf.connect(ng); ng.connect(env); ns.start(t);
+  ignoreUntil=performance.now()+3500;
+  holdMs=0; done=false;
+  $('msg').textContent=listening?'Now sing it back…':'Tap Start listening, then sing it back.';
+}
+$('play').onclick=pluck;
+
+$('mic').onclick=async()=>{
+  if(listening){stop();return}
+  try{
+    ctx();
+    const st=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+    const src=ac.createMediaStreamSource(st);
+    an=ac.createAnalyser(); an.fftSize=4096; src.connect(an);
+    buf=new Float32Array(an.fftSize);
+    window._st=st; listening=true; lastT=performance.now();
+    $('mic').textContent='Stop listening';
+    $('cents').textContent='Listening…';
+    $('msg').textContent='Play the note, then sing it back.';
+    requestAnimationFrame(loop);
+  }catch(e){
+    $('msg').textContent='The microphone isn’t available here ('+(e&&e.name?e.name:'error')+'). The page may be blocked from using it when shown inside another site. Try opening the downloaded file directly in Chrome.';
+  }
+};
+function stop(){
+  listening=false;
+  if(window._st)window._st.getTracks().forEach(t=>t.stop());
+  $('mic').textContent='Start listening';
+  $('cents').textContent='Mic off'; $('note').textContent='–';
+  $('hold').style.width='0'; setNeedle(0);
+}
+function setNeedle(c){
+  const deg=Math.max(-50,Math.min(50,c))*0.9;
+  $('needle').style.transform='rotate('+deg+'deg)';
+}
+
+// YIN-style pitch detection
+function detect(sr){
+  an.getFloatTimeDomainData(buf);
+  let e=0; for(let i=0;i<buf.length;i++)e+=buf[i]*buf[i];
+  if(Math.sqrt(e/buf.length)<0.012)return null;
+  const W=buf.length/2, minT=Math.floor(sr/1000), maxT=Math.min(W-1,Math.floor(sr/70));
+  const d=new Float32Array(maxT+1);
+  for(let tau=1;tau<=maxT;tau++){let s=0;for(let i=0;i<W;i++){const x=buf[i]-buf[i+tau];s+=x*x}d[tau]=s}
+  let run=0; const cm=new Float32Array(maxT+1); cm[0]=1;
+  for(let tau=1;tau<=maxT;tau++){run+=d[tau];cm[tau]=d[tau]*tau/run}
+  let tau=-1;
+  for(let t=minT;t<=maxT;t++){
+    if(cm[t]<0.12){while(t+1<=maxT&&cm[t+1]<cm[t])t++;tau=t;break}
+  }
+  if(tau<0)return null;
+  const a=cm[tau-1],b=cm[tau],c=cm[Math.min(tau+1,maxT)];
+  const den=a-2*b+c, shift=den?0.5*(a-c)/den:0;
+  return sr/(tau+shift);
+}
+
+function loop(now){
+  if(!listening)return;
+  const dt=now-lastT; lastT=now;
+  const f=detect(ac.sampleRate);
+  if(now<ignoreUntil){
+    $('cents').textContent='Listen…'; $('hold').style.width='0';
+  } else if(f){
+    const midi=69+12*Math.log2(f/440);
+    $('note').textContent=NAMES[((Math.round(midi)%12)+12)%12]+(Math.floor(Math.round(midi)/12)-1);
+    let c=1200*Math.log2(f/STRINGS[sel].f);
+    if($('oct').checked)c-=1200*Math.round(c/1200);
+    const shown=Math.round(c);
+    const octTxt=(!$('oct').checked||Math.abs(c)>600)?'':'';
+    $('cents').textContent=(shown>0?'+':'')+shown+' cents '+(Math.abs(c)<=25?'· on pitch':c>0?'· too high':'· too low');
+    setNeedle(c);
+    if(Math.abs(c)<=25){
+      lastGood=now; holdMs+=dt;
+      if(holdMs>=1000&&!done){done=true;hits++;$('hits').textContent=hits;$('msg').textContent='Matched '+STRINGS[sel].n+'. Tap Play note to hear it again, or pick another string.'}
+    } else if(now-lastGood>250){holdMs=0}
+    if(!done)$('msg').textContent=Math.abs(c)<=25?'Hold it steady…':(c>0?'Slide down a little.':'Slide up a little.');
+    $('hold').style.width=Math.min(100,holdMs/10)+'%';
+  } else {
+    if(now-lastGood>250)holdMs=Math.max(0,holdMs-dt*2);
+    $('hold').style.width=Math.min(100,holdMs/10)+'%';
+    $('cents').textContent='Listening…'; $('note').textContent='–';
+  }
+  requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
